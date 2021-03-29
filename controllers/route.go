@@ -7,6 +7,8 @@ import (
 	"html/template"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/NYTimes/gziphandler"
@@ -40,6 +42,11 @@ type AdminServer struct {
 	limiter *ratelimit.PostLimiter
 }
 
+type spaHandler struct {
+	staticPath string
+	indexPath  string
+}
+
 var defaultTLSConfig = &tls.Config{
 	PreferServerCipherSuites: true,
 	CurvePreferences: []tls.CurveID{
@@ -66,6 +73,36 @@ func WithWorker(w worker.Worker) AdminServerOption {
 	return func(as *AdminServer) {
 		as.worker = w
 	}
+}
+
+func (h spaHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	// get the absolute path to prevent directory traversal
+	path, err := filepath.Abs(r.URL.Path)
+	if err != nil {
+		// if we failed to get the absolute path respond with a 400 bad request
+		// and stop
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// prepend the path with the path to the static directory
+	path = filepath.Join(h.staticPath, path)
+
+	// check whether a file exists at the given path
+	_, err = os.Stat(path)
+	if os.IsNotExist(err) {
+		// file does not exist, serve index.html
+		http.ServeFile(w, r, filepath.Join(h.staticPath, h.indexPath))
+		return
+	} else if err != nil {
+		// if we got an error (that wasn't that the file doesn't exist) stating the
+		// file, return a 500 internal server error and stop
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// otherwise, use http.FileServer to serve the static dir
+	http.FileServer(http.Dir(h.staticPath)).ServeHTTP(w, r)
 }
 
 // NewAdminServer returns a new instance of the AdminServer with the
@@ -121,21 +158,23 @@ func (as *AdminServer) Shutdown() error {
 // This function returns an http.Handler to be used in http.ListenAndServe().
 func (as *AdminServer) registerRoutes() {
 	router := mux.NewRouter()
+	spa := spaHandler{staticPath: "nuxt/dist", indexPath: "index.html"}
+	router.PathPrefix("/").Handler(spa)
 	// Base Front-end routes
-	router.HandleFunc("/", mid.Use(as.Base, mid.RequireLogin))
-	router.HandleFunc("/login", mid.Use(as.Login, as.limiter.Limit))
-	router.HandleFunc("/logout", mid.Use(as.Logout, mid.RequireLogin))
-	router.HandleFunc("/reset_password", mid.Use(as.ResetPassword, mid.RequireLogin))
-	router.HandleFunc("/campaigns", mid.Use(as.Campaigns, mid.RequireLogin))
-	router.HandleFunc("/campaigns/{id:[0-9]+}", mid.Use(as.CampaignID, mid.RequireLogin))
-	router.HandleFunc("/templates", mid.Use(as.Templates, mid.RequireLogin))
-	router.HandleFunc("/groups", mid.Use(as.Groups, mid.RequireLogin))
-	router.HandleFunc("/landing_pages", mid.Use(as.LandingPages, mid.RequireLogin))
-	router.HandleFunc("/sending_profiles", mid.Use(as.SendingProfiles, mid.RequireLogin))
-	router.HandleFunc("/settings", mid.Use(as.Settings, mid.RequireLogin))
-	router.HandleFunc("/users", mid.Use(as.UserManagement, mid.RequirePermission(models.PermissionModifySystem), mid.RequireLogin))
-	router.HandleFunc("/webhooks", mid.Use(as.Webhooks, mid.RequirePermission(models.PermissionModifySystem), mid.RequireLogin))
-	router.HandleFunc("/impersonate", mid.Use(as.Impersonate, mid.RequirePermission(models.PermissionModifySystem), mid.RequireLogin))
+
+	// router.HandleFunc("/login", mid.Use(as.Login, as.limiter.Limit))
+	// router.HandleFunc("/logout", mid.Use(as.Logout, mid.RequireLogin))
+	// router.HandleFunc("/reset_password", mid.Use(as.ResetPassword, mid.RequireLogin))
+	// router.HandleFunc("/campaigns", mid.Use(as.Campaigns, mid.RequireLogin))
+	// router.HandleFunc("/campaigns/{id:[0-9]+}", mid.Use(as.CampaignID, mid.RequireLogin))
+	// router.HandleFunc("/templates", mid.Use(as.Templates, mid.RequireLogin))
+	// router.HandleFunc("/groups", mid.Use(as.Groups, mid.RequireLogin))
+	// router.HandleFunc("/landing_pages", mid.Use(as.LandingPages, mid.RequireLogin))
+	// router.HandleFunc("/sending_profiles", mid.Use(as.SendingProfiles, mid.RequireLogin))
+	// router.HandleFunc("/settings", mid.Use(as.Settings, mid.RequireLogin))
+	// router.HandleFunc("/users", mid.Use(as.UserManagement, mid.RequirePermission(models.PermissionModifySystem), mid.RequireLogin))
+	// router.HandleFunc("/webhooks", mid.Use(as.Webhooks, mid.RequirePermission(models.PermissionModifySystem), mid.RequireLogin))
+	// router.HandleFunc("/impersonate", mid.Use(as.Impersonate, mid.RequirePermission(models.PermissionModifySystem), mid.RequireLogin))
 	// Create the API routes
 	api := api.NewServer(
 		api.WithWorker(as.worker),

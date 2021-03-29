@@ -126,6 +126,7 @@ func main() {
 		go imapMonitor.Start()
 	}
 	if *mode == "phish" || *mode == "all" {
+
 		go phishServer.Start()
 	}
 
